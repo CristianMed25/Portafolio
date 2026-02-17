@@ -11,7 +11,8 @@ type Props = {
   params: Promise<{ slug: string }>;
 };
 
-export const revalidate = 60;
+export const dynamic = 'force-static';
+export const revalidate = 3600;
 
 export const generateStaticParams = async () => {
   const slugs = await getAllProjectSlugs();
@@ -44,6 +45,8 @@ export default async function ProjectDetailPage({ params }: Props) {
   }
 
   const coverUrl = getStrapiMediaUrl(project.cover);
+  const coverWidth = project.cover?.width ?? 1400;
+  const coverHeight = project.cover?.height ?? 900;
   const demoUrl = project.demoUrl ?? project.liveUrl;
   const galleryItems = project.gallery ?? [];
 
@@ -89,8 +92,9 @@ export default async function ProjectDetailPage({ params }: Props) {
               <Image
                 src={coverUrl}
                 alt={project.cover?.alternativeText ?? project.title}
-                width={1400}
-                height={900}
+                width={coverWidth}
+                height={coverHeight}
+                sizes="(max-width: 1024px) 100vw, 1120px"
                 className="w-full rounded-2xl border border-[var(--border-soft)] object-cover"
               />
             ) : (
@@ -112,8 +116,9 @@ export default async function ProjectDetailPage({ params }: Props) {
                       key={image.documentId}
                       src={url}
                       alt={image.alternativeText ?? project.title}
-                      width={1000}
-                      height={700}
+                      width={image.width ?? 1000}
+                      height={image.height ?? 700}
+                      sizes="(max-width: 768px) 100vw, 50vw"
                       className="w-full rounded-xl border border-[var(--border-soft)] object-cover"
                     />
                   );

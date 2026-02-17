@@ -45,6 +45,8 @@ if (strapiUrl) {
 const nextConfig: NextConfig = {
   images: {
     remotePatterns: [localPattern, ...cloudPatterns, ...dynamicPatterns],
+    formats: ['image/avif', 'image/webp'],
+    minimumCacheTTL: 60 * 60 * 24 * 30,
   },
 };
 

@@ -11,6 +11,8 @@ type ProjectCardProps = {
 export const ProjectCard = ({ project }: ProjectCardProps) => {
   const coverUrl = getStrapiMediaUrl(project.cover);
   const coverAlt = project.cover?.alternativeText || project.title;
+  const coverWidth = project.cover?.width ?? 1200;
+  const coverHeight = project.cover?.height ?? 800;
 
   return (
     <article className="surface-card group rounded-2xl p-4 transition-all duration-200 hover:-translate-y-0.5 hover:border-[var(--border-strong)]">
@@ -20,8 +22,9 @@ export const ProjectCard = ({ project }: ProjectCardProps) => {
             <Image
               src={coverUrl}
               alt={coverAlt}
-              width={1200}
-              height={800}
+              width={coverWidth}
+              height={coverHeight}
+              sizes="(max-width: 768px) 100vw, 50vw"
               className="h-44 w-full object-cover transition-transform duration-300 group-hover:scale-[1.02] sm:h-52"
             />
           ) : (

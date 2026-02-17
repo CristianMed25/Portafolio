@@ -1,3 +1,4 @@
+import { cache } from 'react';
 import qs from 'qs';
 
 import { mockProjects, mockSite } from '@/lib/mock';
@@ -10,9 +11,63 @@ import type {
   StrapiSingleResponse,
 } from '@/lib/types';
 
-const STRAPI_URL = process.env.NEXT_PUBLIC_STRAPI_URL ?? 'http://localhost:1337';
+const RAW_STRAPI_URL = process.env.NEXT_PUBLIC_STRAPI_URL ?? 'http://localhost:1337';
 const STRAPI_API_TOKEN = process.env.STRAPI_API_TOKEN;
 const REQUEST_TIMEOUT_MS = 3500;
+const STRAPI_FAILURE_BACKOFF_MS = 45_000;
+const DEFAULT_REVALIDATE_SECONDS = 900;
+
+const REVALIDATE_WINDOW = {
+  site: 6 * 60 * 60,
+  projects: 30 * 60,
+  project: 60 * 60,
+  slugs: 24 * 60 * 60,
+  health: 5 * 60,
+} as const;
+
+export const STRAPI_CACHE_TAGS = {
+  site: 'strapi:site',
+  homepage: 'strapi:homepage',
+  projects: 'strapi:projects',
+  sitemap: 'strapi:sitemap',
+  health: 'strapi:health',
+  projectPrefix: 'strapi:project:',
+  tagPrefix: 'strapi:tag:',
+} as const;
+
+type StrapiFetchOptions = {
+  revalidate?: number;
+  tags?: string[];
+  requestLabel?: string;
+};
+
+const normalizeBaseUrl = (value: string): string => {
+  try {
+    return new URL(value).toString().replace(/\/$/, '');
+  } catch {
+    return 'http://localhost:1337';
+  }
+};
+
+const STRAPI_URL = normalizeBaseUrl(RAW_STRAPI_URL);
+let strapiUnavailableUntil = 0;
+let strapiRequestCount = 0;
+
+const shouldLogStrapiRequests = (): boolean => process.env.LOG_STRAPI_REQUESTS === 'true';
+
+const logStrapi = (message: string): void => {
+  if (shouldLogStrapiRequests()) {
+    console.info(message);
+  }
+};
+
+const dedupeTags = (tags: string[] | undefined): string[] | undefined => {
+  if (!tags || tags.length === 0) {
+    return undefined;
+  }
+
+  return [...new Set(tags)];
+};
 
 const sortProjects = (projects: Project[]): Project[] => {
   return [...projects].sort((a, b) => {
@@ -30,6 +85,14 @@ const sortProjects = (projects: Project[]): Project[] => {
   });
 };
 
+const normalizeLimit = (limit: number | undefined): number => {
+  if (!limit || limit <= 0) {
+    return 0;
+  }
+
+  return Math.trunc(limit);
+};
+
 const filterProjects = (projects: Project[], options: GetProjectsOptions): Project[] => {
   const filtered = projects.filter((project) => {
     if (options.featuredOnly && !project.featured) {
@@ -44,11 +107,13 @@ const filterProjects = (projects: Project[], options: GetProjectsOptions): Proje
   });
 
   const sorted = sortProjects(filtered);
-  if (!options.limit || options.limit <= 0) {
+  const limit = normalizeLimit(options.limit);
+
+  if (limit === 0) {
     return sorted;
   }
 
-  return sorted.slice(0, options.limit);
+  return sorted.slice(0, limit);
 };
 
 const safeStack = (stack: unknown): string[] => {
@@ -84,6 +149,16 @@ const buildApiUrl = (path: string, queryObj?: Record<string, unknown>): string =
   return `${STRAPI_URL}${path}${query ? `?${query}` : ''}`;
 };
 
+const getProjectsTagSet = (tag?: string): string[] => {
+  const tags: string[] = [STRAPI_CACHE_TAGS.projects, STRAPI_CACHE_TAGS.homepage];
+
+  if (tag) {
+    tags.push(`${STRAPI_CACHE_TAGS.tagPrefix}${tag}`);
+  }
+
+  return tags;
+};
+
 export const getStrapiMediaUrl = (media?: Pick<StrapiMedia, 'url'> | null): string | null => {
   if (!media?.url) {
     return null;
@@ -99,9 +174,18 @@ export const getStrapiMediaUrl = (media?: Pick<StrapiMedia, 'url'> | null): stri
 export const strapiFetch = async <T>(
   path: string,
   queryObj?: Record<string, unknown>,
+  options: StrapiFetchOptions = {},
 ): Promise<T | null> => {
+  if (Date.now() < strapiUnavailableUntil) {
+    logStrapi(`[strapi] skipping ${path} while circuit breaker is open`);
+    return null;
+  }
+
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+  const requestId = ++strapiRequestCount;
+  const label = options.requestLabel ?? path;
+  const url = buildApiUrl(path, queryObj);
 
   try {
     const headers: Record<string, string> = {
@@ -112,9 +196,15 @@ export const strapiFetch = async <T>(
       headers.Authorization = `Bearer ${STRAPI_API_TOKEN}`;
     }
 
-    const response = await fetch(buildApiUrl(path, queryObj), {
+    const tags = dedupeTags(options.tags);
+    const nextOptions = {
+      revalidate: options.revalidate ?? DEFAULT_REVALIDATE_SECONDS,
+      ...(tags ? { tags } : {}),
+    };
+
+    const response = await fetch(url, {
       headers,
-      next: { revalidate: 60 },
+      next: nextOptions,
       signal: controller.signal,
     });
 
@@ -122,104 +212,159 @@ export const strapiFetch = async <T>(
       throw new Error(`Strapi request failed with status ${response.status}`);
     }
 
+    strapiUnavailableUntil = 0;
+    logStrapi(`[strapi] #${requestId} ok (${label})`);
+
     const data = (await response.json()) as T;
     return data;
-  } catch {
+  } catch (error) {
+    strapiUnavailableUntil = Date.now() + STRAPI_FAILURE_BACKOFF_MS;
+    logStrapi(`[strapi] #${requestId} failed (${label}) ${(error as Error).message}`);
     return null;
   } finally {
     clearTimeout(timeout);
   }
 };
 
-export const getSite = async (): Promise<Site> => {
-  const response = await strapiFetch<StrapiSingleResponse<Site>>('/api/site', {
-    fields: ['name', 'headline', 'location', 'about', 'email', 'documentId'],
-    populate: {
-      avatar: {
-        fields: ['url', 'alternativeText', 'width', 'height', 'documentId'],
+const getSiteCached = cache(async (): Promise<Site> => {
+  const response = await strapiFetch<StrapiSingleResponse<Site>>(
+    '/api/site',
+    {
+      fields: ['name', 'headline', 'location', 'about', 'email', 'documentId'],
+      populate: {
+        avatar: {
+          fields: ['url', 'alternativeText', 'width', 'height', 'documentId'],
+        },
+        socials: {
+          fields: ['label', 'url', 'icon'],
+        },
       },
-      socials: true,
     },
-  });
+    {
+      revalidate: REVALIDATE_WINDOW.site,
+      tags: [STRAPI_CACHE_TAGS.site, STRAPI_CACHE_TAGS.homepage],
+      requestLabel: 'site',
+    },
+  );
 
   if (!response?.data) {
     return mockSite;
   }
 
   return response.data;
+});
+
+export const getSite = async (): Promise<Site> => {
+  return getSiteCached();
 };
 
-export const getProjects = async (options: GetProjectsOptions = {}): Promise<Project[]> => {
+const getProjectsCached = cache(async (featuredOnly: boolean, tag: string, limit: number): Promise<Project[]> => {
   const filters: Record<string, unknown> = {};
+  const cleanTag = tag.trim();
+  const cleanLimit = normalizeLimit(limit);
 
-  if (options.featuredOnly) {
+  if (featuredOnly) {
     filters.featured = { $eq: true };
   }
 
-  if (options.tag) {
+  if (cleanTag) {
     filters.tags = {
-      slug: { $eq: options.tag },
+      slug: { $eq: cleanTag },
     };
   }
 
-  const response = await strapiFetch<StrapiCollectionResponse<Project>>('/api/projects', {
-    fields: ['title', 'slug', 'summary', 'featured', 'order', 'stack', 'repoUrl', 'demoUrl', 'liveUrl', 'documentId'],
-    sort: ['featured:desc', 'order:asc', 'title:asc'],
-    filters,
-    pagination: options.limit ? { pageSize: options.limit } : undefined,
-    populate: {
-      cover: {
-        fields: ['url', 'alternativeText', 'width', 'height', 'documentId'],
-      },
-      tags: {
-        fields: ['name', 'slug', 'documentId'],
+  const response = await strapiFetch<StrapiCollectionResponse<Project>>(
+    '/api/projects',
+    {
+      fields: ['title', 'slug', 'summary', 'featured', 'order', 'stack', 'documentId'],
+      sort: ['featured:desc', 'order:asc', 'title:asc'],
+      filters: Object.keys(filters).length > 0 ? filters : undefined,
+      pagination: cleanLimit > 0 ? { page: 1, pageSize: cleanLimit } : undefined,
+      populate: {
+        cover: {
+          fields: ['url', 'alternativeText', 'width', 'height', 'documentId'],
+        },
+        tags: {
+          fields: ['name', 'slug', 'documentId'],
+        },
       },
     },
-  });
+    {
+      revalidate: REVALIDATE_WINDOW.projects,
+      tags: getProjectsTagSet(cleanTag),
+      requestLabel: cleanTag ? `projects(tag=${cleanTag})` : 'projects',
+    },
+  );
 
   if (!response?.data) {
-    return filterProjects(mockProjects, options);
+    return filterProjects(mockProjects, {
+      featuredOnly,
+      tag: cleanTag || undefined,
+      limit: cleanLimit || undefined,
+    });
   }
 
   return normalizeProjects(response.data);
+});
+
+export const getProjects = async (options: GetProjectsOptions = {}): Promise<Project[]> => {
+  const featuredOnly = Boolean(options.featuredOnly);
+  const tag = options.tag?.trim() ?? '';
+  const limit = normalizeLimit(options.limit);
+
+  return getProjectsCached(featuredOnly, tag, limit);
 };
 
-export const getProjectBySlug = async (slug: string): Promise<Project | null> => {
-  const response = await strapiFetch<StrapiCollectionResponse<Project>>('/api/projects', {
-    filters: {
-      slug: { $eq: slug },
-    },
-    pagination: {
-      pageSize: 1,
-    },
-    fields: [
-      'title',
-      'slug',
-      'summary',
-      'description',
-      'featured',
-      'order',
-      'stack',
-      'repoUrl',
-      'demoUrl',
-      'liveUrl',
-      'documentId',
-    ],
-    populate: {
-      cover: {
-        fields: ['url', 'alternativeText', 'width', 'height', 'documentId'],
+const getProjectBySlugCached = cache(async (slug: string): Promise<Project | null> => {
+  const cleanSlug = slug.trim();
+  if (!cleanSlug) {
+    return null;
+  }
+
+  const response = await strapiFetch<StrapiCollectionResponse<Project>>(
+    '/api/projects',
+    {
+      filters: {
+        slug: { $eq: cleanSlug },
       },
-      gallery: {
-        fields: ['url', 'alternativeText', 'width', 'height', 'documentId'],
+      pagination: {
+        page: 1,
+        pageSize: 1,
       },
-      tags: {
-        fields: ['name', 'slug', 'documentId'],
+      fields: [
+        'title',
+        'slug',
+        'summary',
+        'description',
+        'featured',
+        'order',
+        'stack',
+        'repoUrl',
+        'demoUrl',
+        'liveUrl',
+        'documentId',
+      ],
+      populate: {
+        cover: {
+          fields: ['url', 'alternativeText', 'width', 'height', 'documentId'],
+        },
+        gallery: {
+          fields: ['url', 'alternativeText', 'width', 'height', 'documentId'],
+        },
+        tags: {
+          fields: ['name', 'slug', 'documentId'],
+        },
       },
     },
-  });
+    {
+      revalidate: REVALIDATE_WINDOW.project,
+      tags: [STRAPI_CACHE_TAGS.projects, `${STRAPI_CACHE_TAGS.projectPrefix}${cleanSlug}`],
+      requestLabel: `project(${cleanSlug})`,
+    },
+  );
 
   if (!response?.data) {
-    const fallbackProject = mockProjects.find((project) => project.slug === slug);
+    const fallbackProject = mockProjects.find((project) => project.slug === cleanSlug);
     return fallbackProject ? normalizeProject(fallbackProject) : null;
   }
 
@@ -229,31 +374,66 @@ export const getProjectBySlug = async (slug: string): Promise<Project | null> =>
   }
 
   return normalizeProject(project);
+});
+
+export const getProjectBySlug = async (slug: string): Promise<Project | null> => {
+  return getProjectBySlugCached(slug);
 };
 
-export const getAllProjectSlugs = async (): Promise<string[]> => {
-  const response = await strapiFetch<StrapiCollectionResponse<Pick<Project, 'slug'>>>('/api/projects', {
-    fields: ['slug'],
-    sort: ['order:asc', 'title:asc'],
-    pagination: {
-      pageSize: 200,
+const getAllProjectSlugsCached = cache(async (): Promise<string[]> => {
+  const response = await strapiFetch<StrapiCollectionResponse<Pick<Project, 'slug'>>>(
+    '/api/projects',
+    {
+      fields: ['slug'],
+      sort: ['order:asc', 'title:asc'],
+      pagination: {
+        page: 1,
+        pageSize: 200,
+      },
     },
-  });
+    {
+      revalidate: REVALIDATE_WINDOW.slugs,
+      tags: [STRAPI_CACHE_TAGS.projects, STRAPI_CACHE_TAGS.sitemap],
+      requestLabel: 'project-slugs',
+    },
+  );
 
   if (!response?.data) {
     return mockProjects.map((project) => project.slug);
   }
 
   return response.data.map((project) => project.slug).filter((slug): slug is string => Boolean(slug));
+});
+
+export const getAllProjectSlugs = async (): Promise<string[]> => {
+  return getAllProjectSlugsCached();
 };
 
-export const checkStrapiConnection = async (): Promise<boolean> => {
-  const response = await strapiFetch<StrapiCollectionResponse<Pick<Project, 'documentId'>>>('/api/projects', {
-    fields: ['documentId'],
-    pagination: {
-      pageSize: 1,
+export const getHomepage = async (): Promise<{ site: Site; projects: Project[] }> => {
+  const [site, projects] = await Promise.all([getSite(), getProjects()]);
+  return { site, projects };
+};
+
+const checkStrapiConnectionCached = cache(async (): Promise<boolean> => {
+  const response = await strapiFetch<StrapiCollectionResponse<Pick<Project, 'documentId'>>>(
+    '/api/projects',
+    {
+      fields: ['documentId'],
+      pagination: {
+        page: 1,
+        pageSize: 1,
+      },
     },
-  });
+    {
+      revalidate: REVALIDATE_WINDOW.health,
+      tags: [STRAPI_CACHE_TAGS.health],
+      requestLabel: 'health-check',
+    },
+  );
 
   return Boolean(response);
+});
+
+export const checkStrapiConnection = async (): Promise<boolean> => {
+  return checkStrapiConnectionCached();
 };

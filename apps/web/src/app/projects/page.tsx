@@ -9,7 +9,8 @@ export const metadata: Metadata = {
   description: 'Listado completo de proyectos publicados.',
 };
 
-export const revalidate = 60;
+export const dynamic = 'force-static';
+export const revalidate = 1800;
 
 export default async function ProjectsPage() {
   const projects = await getProjects();

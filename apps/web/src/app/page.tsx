@@ -4,10 +4,11 @@ import { Container } from '@/components/container';
 import { Markdown } from '@/components/markdown';
 import { ProjectCard } from '@/components/project-card';
 import { Section } from '@/components/section';
-import { getProjects, getSite } from '@/lib/strapi';
+import { getHomepage } from '@/lib/strapi';
 import type { SocialLink } from '@/lib/types';
 
-export const revalidate = 60;
+export const dynamic = 'force-static';
+export const revalidate = 1800;
 
 const findSocial = (socials: SocialLink[] | undefined, label: string): string => {
   if (!socials) {
@@ -19,7 +20,7 @@ const findSocial = (socials: SocialLink[] | undefined, label: string): string =>
 };
 
 export default async function Home() {
-  const [site, projects] = await Promise.all([getSite(), getProjects()]);
+  const { site, projects } = await getHomepage();
 
   const githubUrl = findSocial(site.socials, 'github');
   const cvUrl = process.env.NEXT_PUBLIC_CV_URL ?? '#';
@@ -54,13 +55,13 @@ export default async function Home() {
         </Container>
       </section>
 
-      <Section id="about" title="About" description="Resumen profesional editable desde Strapi.">
+      <Section id="about" title="About" description="">
         <div className="max-w-3xl">
           <Markdown content={site.about ?? ''} />
         </div>
       </Section>
 
-      <Section id="projects" title="Projects" description="Listado rápido y enfocado en impacto.">
+      <Section id="projects" title="Projects" description="">
         {projects.length > 0 ? (
           <>
             <div className="grid grid-cols-1 gap-5 md:grid-cols-2">
