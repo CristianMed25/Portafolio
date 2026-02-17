@@ -1,5 +1,7 @@
 import type { NextConfig } from 'next';
 
+const isDevelopment = process.env.NODE_ENV !== 'production';
+
 const localPattern = {
   protocol: 'http' as const,
   hostname: 'localhost',
@@ -47,6 +49,7 @@ const nextConfig: NextConfig = {
     remotePatterns: [localPattern, ...cloudPatterns, ...dynamicPatterns],
     formats: ['image/avif', 'image/webp'],
     minimumCacheTTL: 60 * 60 * 24 * 30,
+    dangerouslyAllowLocalIP: isDevelopment,
   },
 };
 

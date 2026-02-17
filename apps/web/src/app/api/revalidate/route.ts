@@ -145,13 +145,46 @@ const safeJson = async (request: NextRequest): Promise<RevalidateWebhookPayload>
   }
 };
 
+const extractAuthorizationSecret = (request: NextRequest): string | undefined => {
+  const authHeader = request.headers.get('authorization');
+  if (!authHeader) {
+    return undefined;
+  }
+
+  const [scheme, token] = authHeader.trim().split(/\s+/, 2);
+  if (scheme?.toLowerCase() !== 'bearer' || !token) {
+    return undefined;
+  }
+
+  return token;
+};
+
+const getIncomingSecret = (request: NextRequest, payloadSecret?: string): string | undefined => {
+  const fromBody = payloadSecret?.trim();
+  if (fromBody) {
+    return fromBody;
+  }
+
+  const fromQuery = request.nextUrl.searchParams.get('secret')?.trim();
+  if (fromQuery) {
+    return fromQuery;
+  }
+
+  const fromHeader = request.headers.get('x-revalidate-secret')?.trim();
+  if (fromHeader) {
+    return fromHeader;
+  }
+
+  return extractAuthorizationSecret(request);
+};
+
 const validateSecret = (secret: string | undefined): boolean => {
   const allowedSecret = getAllowedSecret();
   return Boolean(allowedSecret) && allowedSecret === secret;
 };
 
 export async function GET(request: NextRequest): Promise<NextResponse> {
-  const secret = request.nextUrl.searchParams.get('secret') ?? undefined;
+  const secret = getIncomingSecret(request);
   if (!validateSecret(secret)) {
     return unauthorizedResponse();
   }
@@ -177,7 +210,8 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
 
 export async function POST(request: NextRequest): Promise<NextResponse> {
   const payload = await safeJson(request);
-  if (!validateSecret(payload.secret)) {
+  const secret = getIncomingSecret(request, payload.secret);
+  if (!validateSecret(secret)) {
     return unauthorizedResponse();
   }
 

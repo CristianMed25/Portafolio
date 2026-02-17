@@ -21,7 +21,7 @@ export default async function ProjectsPage() {
         <div className="mb-10 max-w-2xl space-y-3">
           <h1 className="text-3xl font-semibold tracking-tight text-[var(--text-primary)] sm:text-4xl">Projects</h1>
           <p className="text-sm text-[var(--text-secondary)]">
-            Colección completa de proyectos. Cada detalle se alimenta desde Strapi y usa fallback local si el CMS no está disponible.
+            Colección completa de proyectos.
           </p>
         </div>
 
