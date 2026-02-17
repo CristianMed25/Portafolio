@@ -10,7 +10,18 @@ const manrope = Manrope({
   variable: '--font-geist-sans',
 });
 
-const siteUrl = process.env.NEXT_PUBLIC_SITE_URL ?? 'http://localhost:3000';
+const getSiteUrl = (): string => {
+  const fallback = 'http://localhost:3000';
+  const candidate = process.env.NEXT_PUBLIC_SITE_URL ?? fallback;
+
+  try {
+    return new URL(candidate).toString();
+  } catch {
+    return fallback;
+  }
+};
+
+const siteUrl = getSiteUrl();
 
 export const metadata: Metadata = {
   metadataBase: new URL(siteUrl),
