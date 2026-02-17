@@ -26,12 +26,12 @@ const siteUrl = getSiteUrl();
 export const metadata: Metadata = {
   metadataBase: new URL(siteUrl),
   title: {
-    default: 'Tu Nombre | Portafolio',
-    template: '%s | Tu Nombre',
+    default: 'Cristian Medina | Portafolio',
+    template: '%s | Cristian Medina',
   },
   description: 'Portafolio de desarrollo web y backend con enfoque minimalista y performance-first.',
   openGraph: {
-    title: 'Tu Nombre | Portafolio',
+    title: 'Cristian Medina | Portafolio',
     description: 'Portafolio de desarrollo web y backend con enfoque minimalista y performance-first.',
     type: 'website',
     url: siteUrl,

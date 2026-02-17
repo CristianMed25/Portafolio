@@ -3,7 +3,7 @@ import type { Project, Site } from '@/lib/types';
 export const mockSite: Site = {
   id: 1,
   documentId: 'site-mock-1',
-  name: 'Tu Nombre',
+  name: 'Cristian Medina',
   headline: 'Desarrollador Web • Backend/Full-stack',
   location: 'Ciudad, País',
   about: `Construyo experiencias web rápidas, mantenibles y claras.
