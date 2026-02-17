@@ -1,0 +1,21 @@
+{
+  "collectionName": "components_shared_socials",
+  "info": {
+    "displayName": "social",
+    "description": "External social profile link"
+  },
+  "options": {},
+  "attributes": {
+    "label": {
+      "type": "string",
+      "required": true
+    },
+    "url": {
+      "type": "string",
+      "required": true
+    },
+    "icon": {
+      "type": "string"
+    }
+  }
+}

@@ -1,0 +1,17 @@
+{
+  "name": "portafolio-monorepo",
+  "version": "1.0.0",
+  "private": true,
+  "workspaces": [
+    "apps/*"
+  ],
+  "scripts": {
+    "dev": "node scripts/dev.js",
+    "dev:cms": "npm --prefix apps/cms run develop",
+    "dev:web": "npm --prefix apps/web run dev",
+    "build": "npm run build:cms && npm run build:web",
+    "build:cms": "npm --prefix apps/cms run build",
+    "build:web": "npm --prefix apps/web run build",
+    "seed:cms": "npm --prefix apps/cms run seed"
+  }
+}

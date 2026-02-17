@@ -1,0 +1,124 @@
+@import "tailwindcss";
+
+:root {
+  --bg-base: #060816;
+  --bg-surface: rgba(16, 20, 46, 0.74);
+  --bg-card: rgba(22, 27, 60, 0.78);
+  --bg-chip: rgba(109, 118, 210, 0.12);
+
+  --text-primary: #f1f4ff;
+  --text-secondary: #d2d8fa;
+  --text-muted: #a4add5;
+
+  --border-soft: rgba(134, 150, 255, 0.28);
+  --border-strong: rgba(134, 150, 255, 0.52);
+
+  --accent: #8b5cf6;
+  --accent-strong: #9f7cff;
+  --accent-cyan: #38bdf8;
+  --accent-soft: rgba(139, 92, 246, 0.22);
+
+  --shadow-soft: 0 12px 36px rgba(6, 10, 30, 0.4);
+  --focus-ring: 0 0 0 3px rgba(111, 150, 255, 0.5);
+}
+
+@theme inline {
+  --font-sans: var(--font-geist-sans);
+
+  --color-background: var(--bg-base);
+  --color-foreground: var(--text-primary);
+  --color-surface: var(--bg-surface);
+  --color-card: var(--bg-card);
+  --color-border: var(--border-soft);
+  --color-accent: var(--accent);
+  --color-accent-cyan: var(--accent-cyan);
+  --color-muted: var(--text-muted);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  background:
+    radial-gradient(circle at 10% -5%, rgba(56, 189, 248, 0.2), transparent 40%),
+    radial-gradient(circle at 78% -8%, rgba(139, 92, 246, 0.25), transparent 42%),
+    linear-gradient(180deg, rgba(13, 17, 45, 0.9) 0%, rgba(6, 8, 22, 1) 45%);
+  color: var(--text-primary);
+  font-family: var(--font-geist-sans), ui-sans-serif, system-ui, sans-serif;
+}
+
+a {
+  color: inherit;
+}
+
+::selection {
+  background: rgba(139, 92, 246, 0.34);
+  color: #ffffff;
+}
+
+:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+.surface-panel {
+  border: 1px solid var(--border-soft);
+  background: var(--bg-surface);
+  box-shadow: var(--shadow-soft);
+  backdrop-filter: blur(14px);
+}
+
+.surface-card {
+  border: 1px solid var(--border-soft);
+  background: var(--bg-card);
+  box-shadow: var(--shadow-soft);
+  backdrop-filter: blur(10px);
+}
+
+.btn-primary {
+  border: 1px solid color-mix(in oklab, var(--accent) 60%, var(--accent-cyan));
+  background: linear-gradient(135deg, color-mix(in oklab, var(--accent) 86%, #fff 14%), color-mix(in oklab, var(--accent-cyan) 80%, #fff 20%));
+  color: #ffffff;
+  transition: transform 180ms ease, filter 180ms ease;
+}
+
+.btn-primary:hover {
+  transform: translateY(-1px);
+  filter: brightness(1.06);
+}
+
+.btn-primary:active {
+  transform: translateY(0);
+  filter: brightness(0.98);
+}
+
+.btn-secondary {
+  border: 1px solid var(--border-soft);
+  background: color-mix(in oklab, var(--bg-card) 78%, transparent);
+  color: var(--text-secondary);
+  transition: border-color 180ms ease, background-color 180ms ease, color 180ms ease;
+}
+
+.btn-secondary:hover {
+  border-color: var(--border-strong);
+  background: color-mix(in oklab, var(--accent-soft) 64%, var(--bg-card));
+  color: var(--text-primary);
+}
+
+.btn-secondary:active {
+  transform: translateY(0.5px);
+  filter: brightness(0.98);
+}
+
+.chip {
+  border: 1px solid var(--border-soft);
+  background: var(--bg-chip);
+  color: var(--text-secondary);
+}
