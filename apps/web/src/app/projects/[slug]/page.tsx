@@ -7,6 +7,69 @@ import { Container } from '@/components/container';
 import { Markdown } from '@/components/markdown';
 import { getAllProjectSlugs, getProjectBySlug, getStrapiMediaUrl } from '@/lib/strapi';
 
+type NamedLink = {
+  label: string;
+  url: string;
+};
+
+const isHttpUrl = (value: string): boolean => {
+  try {
+    const url = new URL(value);
+    return url.protocol === 'http:' || url.protocol === 'https:';
+  } catch {
+    return false;
+  }
+};
+
+const parseNamedLinks = (value: string | null | undefined, singleFallbackLabel: string): NamedLink[] => {
+  if (!value) {
+    return [];
+  }
+
+  const segments = value
+    .split('|')
+    .map((segment) => segment.trim())
+    .filter(Boolean);
+
+  if (segments.length === 0) {
+    return [];
+  }
+
+  const links: NamedLink[] = [];
+  const seenUrls = new Set<string>();
+
+  for (const segment of segments) {
+    const urlMatch = segment.match(/https?:\/\/\S+/i);
+    if (!urlMatch) {
+      continue;
+    }
+
+    const url = urlMatch[0].trim().replace(/[;,]+$/, '');
+    if (!isHttpUrl(url) || seenUrls.has(url)) {
+      continue;
+    }
+
+    const labelRaw = segment.slice(0, urlMatch.index ?? 0).trim();
+    const label = labelRaw.replace(/[:\s]+$/, '').trim();
+
+    seenUrls.add(url);
+    links.push({ label, url });
+  }
+
+  if (links.length === 0) {
+    return [];
+  }
+
+  if (links.length === 1) {
+    return [{ label: links[0]?.label || singleFallbackLabel, url: links[0]!.url }];
+  }
+
+  return links.map((link, index) => ({
+    label: link.label || `Repo ${index + 1}`,
+    url: link.url,
+  }));
+};
+
 type Props = {
   params: Promise<{ slug: string }>;
 };
@@ -49,6 +112,7 @@ export default async function ProjectDetailPage({ params }: Props) {
   const coverHeight = project.cover?.height ?? 900;
   const demoUrl = project.demoUrl ?? project.liveUrl;
   const galleryItems = project.gallery ?? [];
+  const repoLinks = parseNamedLinks(project.repoUrl, 'Repositorio');
 
   return (
     <section className="py-12 sm:py-16">
@@ -73,11 +137,17 @@ export default async function ProjectDetailPage({ params }: Props) {
             </div>
 
             <div className="flex flex-wrap gap-3">
-              {project.repoUrl ? (
-                <a href={project.repoUrl} target="_blank" rel="noreferrer" className="btn-secondary rounded-full px-4 py-2 text-sm">
-                  Repositorio
+              {repoLinks.map((link) => (
+                <a
+                  key={`${link.label}-${link.url}`}
+                  href={link.url}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="btn-secondary rounded-full px-4 py-2 text-sm"
+                >
+                  {link.label}
                 </a>
-              ) : null}
+              ))}
 
               {demoUrl ? (
                 <a href={demoUrl} target="_blank" rel="noreferrer" className="btn-secondary rounded-full px-4 py-2 text-sm">
