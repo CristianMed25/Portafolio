@@ -32,6 +32,7 @@ export type Tag = {
 export type Project = {
   id: number;
   documentId: string;
+  createdAt?: string;
   title: string;
   slug: string;
   summary?: string | null;

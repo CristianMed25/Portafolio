@@ -71,17 +71,16 @@ const dedupeTags = (tags: string[] | undefined): string[] | undefined => {
 
 const sortProjects = (projects: Project[]): Project[] => {
   return [...projects].sort((a, b) => {
-    const featuredDelta = Number(Boolean(b.featured)) - Number(Boolean(a.featured));
-    if (featuredDelta !== 0) {
-      return featuredDelta;
+    const createdAtA = a.createdAt ? Date.parse(a.createdAt) : Number.NaN;
+    const createdAtB = b.createdAt ? Date.parse(b.createdAt) : Number.NaN;
+    const hasCreatedAtA = Number.isFinite(createdAtA);
+    const hasCreatedAtB = Number.isFinite(createdAtB);
+
+    if (hasCreatedAtA && hasCreatedAtB && createdAtA !== createdAtB) {
+      return createdAtA - createdAtB;
     }
 
-    const orderDelta = (a.order ?? 0) - (b.order ?? 0);
-    if (orderDelta !== 0) {
-      return orderDelta;
-    }
-
-    return a.title.localeCompare(b.title);
+    return a.id - b.id;
   });
 };
 
@@ -273,8 +272,8 @@ export const getProjects = async (options: GetProjectsOptions = {}): Promise<Pro
   const response = await strapiFetch<StrapiCollectionResponse<Project>>(
     '/api/projects',
     {
-      fields: ['title', 'slug', 'summary', 'featured', 'order', 'stack', 'documentId'],
-      sort: ['featured:desc', 'order:asc', 'title:asc'],
+      fields: ['title', 'slug', 'summary', 'featured', 'order', 'stack', 'documentId', 'createdAt'],
+      sort: ['createdAt:asc', 'id:asc'],
       filters: Object.keys(filters).length > 0 ? filters : undefined,
       pagination: cleanLimit > 0 ? { page: 1, pageSize: cleanLimit } : undefined,
       populate: {
@@ -370,7 +369,7 @@ export const getAllProjectSlugs = async (): Promise<string[]> => {
     '/api/projects',
     {
       fields: ['slug'],
-      sort: ['order:asc', 'title:asc'],
+      sort: ['createdAt:asc', 'id:asc'],
       pagination: {
         page: 1,
         pageSize: 200,
