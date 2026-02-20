@@ -32,6 +32,8 @@ const STRAPI_FAILURE_BACKOFF_MS = getPositiveIntFromEnv('STRAPI_FAILURE_BACKOFF_
 const STRAPI_CIRCUIT_PROBE_MS = getPositiveIntFromEnv('STRAPI_CIRCUIT_PROBE_MS', 4_000);
 const DEFAULT_REVALIDATE_SECONDS = 900;
 const IS_PRODUCTION = process.env.NODE_ENV === 'production';
+const STRAPI_USE_MOCK_IN_PROD = process.env.STRAPI_USE_MOCK_IN_PROD === 'true';
+const CAN_USE_MOCK_FALLBACK = !IS_PRODUCTION || STRAPI_USE_MOCK_IN_PROD;
 
 const REVALIDATE_WINDOW = {
   site: 6 * 60 * 60,
@@ -55,6 +57,7 @@ type StrapiFetchOptions = {
   revalidate?: number;
   tags?: string[];
   requestLabel?: string;
+  disableCache?: boolean;
 };
 
 const normalizeBaseUrl = (value: string): string => {
@@ -74,6 +77,7 @@ let lastKnownProjectSlugs: string[] | null = null;
 const lastKnownProjectsByQuery = new Map<string, Project[]>();
 const lastKnownProjectBySlug = new Map<string, Project>();
 const PROJECT_QUERY_CACHE_LIMIT = 32;
+const PROJECT_BY_SLUG_CACHE_LIMIT = 64;
 
 const shouldLogStrapiRequests = (): boolean => process.env.LOG_STRAPI_REQUESTS === 'true';
 
@@ -201,6 +205,23 @@ const setProjectsCache = (cacheKey: string, projects: Project[]): void => {
   lastKnownProjectsByQuery.set(cacheKey, projects);
 };
 
+const setProjectBySlugCache = (slug: string, project: Project): void => {
+  if (!lastKnownProjectBySlug.has(slug) && lastKnownProjectBySlug.size >= PROJECT_BY_SLUG_CACHE_LIMIT) {
+    const firstKey = lastKnownProjectBySlug.keys().next().value;
+    if (typeof firstKey === 'string') {
+      lastKnownProjectBySlug.delete(firstKey);
+    }
+  }
+
+  lastKnownProjectBySlug.set(slug, project);
+};
+
+const throwNoFallbackError = (resource: string): never => {
+  throw new Error(
+    `[strapi] ${resource} unavailable and no cached data. Set STRAPI_USE_MOCK_IN_PROD=true if you want mock fallback in production.`,
+  );
+};
+
 export const getStrapiMediaUrl = (media?: Pick<StrapiMedia, 'url'> | null): string | null => {
   if (!media?.url) {
     return null;
@@ -255,7 +276,7 @@ export const strapiFetch = async <T>(
 
     const response = await fetch(url, {
       headers,
-      ...(IS_PRODUCTION ? { next: nextOptions } : { cache: 'no-store' as const }),
+      ...(IS_PRODUCTION && !options.disableCache ? { next: nextOptions } : { cache: 'no-store' as const }),
       signal: controller.signal,
     });
 
@@ -304,7 +325,11 @@ export const getSite = async (): Promise<Site> => {
       return lastKnownSite;
     }
 
-    return mockSite;
+    if (CAN_USE_MOCK_FALLBACK) {
+      return mockSite;
+    }
+
+    return throwNoFallbackError('site');
   }
 
   lastKnownSite = response.data;
@@ -361,11 +386,15 @@ export const getProjects = async (options: GetProjectsOptions = {}): Promise<Pro
       return cachedProjects;
     }
 
-    return filterProjects(mockProjects, {
-      featuredOnly,
-      tag: cleanTag || undefined,
-      limit: cleanLimit || undefined,
-    });
+    if (CAN_USE_MOCK_FALLBACK) {
+      return filterProjects(mockProjects, {
+        featuredOnly,
+        tag: cleanTag || undefined,
+        limit: cleanLimit || undefined,
+      });
+    }
+
+    return throwNoFallbackError('projects');
   }
 
   const projects = normalizeProjects(response.data);
@@ -427,8 +456,12 @@ export const getProjectBySlug = async (slug: string): Promise<Project | null> =>
       return cachedProject;
     }
 
-    const fallbackProject = mockProjects.find((project) => project.slug === cleanSlug);
-    return fallbackProject ? normalizeProject(fallbackProject) : null;
+    if (CAN_USE_MOCK_FALLBACK) {
+      const fallbackProject = mockProjects.find((project) => project.slug === cleanSlug);
+      return fallbackProject ? normalizeProject(fallbackProject) : null;
+    }
+
+    return throwNoFallbackError(`project:${cleanSlug}`);
   }
 
   const project = response.data[0];
@@ -437,7 +470,7 @@ export const getProjectBySlug = async (slug: string): Promise<Project | null> =>
   }
 
   const normalized = normalizeProject(project);
-  lastKnownProjectBySlug.set(cleanSlug, normalized);
+  setProjectBySlugCache(cleanSlug, normalized);
   return normalized;
 };
 
@@ -464,7 +497,11 @@ export const getAllProjectSlugs = async (): Promise<string[]> => {
       return lastKnownProjectSlugs;
     }
 
-    return mockProjects.map((project) => project.slug);
+    if (CAN_USE_MOCK_FALLBACK) {
+      return mockProjects.map((project) => project.slug);
+    }
+
+    return throwNoFallbackError('project slugs');
   }
 
   const slugs = response.data.map((project) => project.slug).filter((slug): slug is string => Boolean(slug));
@@ -489,8 +526,8 @@ export const checkStrapiConnection = async (): Promise<boolean> => {
     },
     {
       revalidate: REVALIDATE_WINDOW.health,
-      tags: [STRAPI_CACHE_TAGS.health],
       requestLabel: 'health-check',
+      disableCache: true,
     },
   );
 

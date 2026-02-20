@@ -8,8 +8,7 @@ export const metadata: Metadata = {
   description: 'Estado de conexión del frontend con Strapi.',
 };
 
-export const dynamic = 'force-static';
-export const revalidate = 300;
+export const dynamic = 'force-dynamic';
 
 export default async function HealthPage() {
   const strapiUp = await checkStrapiConnection();
