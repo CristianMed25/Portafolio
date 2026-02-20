@@ -12,8 +12,24 @@ import type {
 
 const RAW_STRAPI_URL = process.env.NEXT_PUBLIC_STRAPI_URL ?? 'http://localhost:1337';
 const STRAPI_API_TOKEN = process.env.STRAPI_API_TOKEN;
-const REQUEST_TIMEOUT_MS = 3500;
-const STRAPI_FAILURE_BACKOFF_MS = 45_000;
+
+const getPositiveIntFromEnv = (name: string, fallback: number): number => {
+  const raw = process.env[name];
+  if (!raw) {
+    return fallback;
+  }
+
+  const parsed = Number.parseInt(raw, 10);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    return fallback;
+  }
+
+  return parsed;
+};
+
+const REQUEST_TIMEOUT_MS = getPositiveIntFromEnv('STRAPI_REQUEST_TIMEOUT_MS', 8_000);
+const STRAPI_FAILURE_BACKOFF_MS = getPositiveIntFromEnv('STRAPI_FAILURE_BACKOFF_MS', 12_000);
+const STRAPI_CIRCUIT_PROBE_MS = getPositiveIntFromEnv('STRAPI_CIRCUIT_PROBE_MS', 4_000);
 const DEFAULT_REVALIDATE_SECONDS = 900;
 const IS_PRODUCTION = process.env.NODE_ENV === 'production';
 
@@ -51,7 +67,13 @@ const normalizeBaseUrl = (value: string): string => {
 
 const STRAPI_URL = normalizeBaseUrl(RAW_STRAPI_URL);
 let strapiUnavailableUntil = 0;
+let strapiLastProbeAt = 0;
 let strapiRequestCount = 0;
+let lastKnownSite: Site | null = null;
+let lastKnownProjectSlugs: string[] | null = null;
+const lastKnownProjectsByQuery = new Map<string, Project[]>();
+const lastKnownProjectBySlug = new Map<string, Project>();
+const PROJECT_QUERY_CACHE_LIMIT = 32;
 
 const shouldLogStrapiRequests = (): boolean => process.env.LOG_STRAPI_REQUESTS === 'true';
 
@@ -158,6 +180,27 @@ const getProjectsTagSet = (tag?: string): string[] => {
   return tags;
 };
 
+const getProjectsCacheKey = (options: {
+  featuredOnly: boolean;
+  tag?: string;
+  limit?: number;
+}): string => {
+  const tag = options.tag?.trim() ?? '';
+  const limit = normalizeLimit(options.limit);
+  return `featured:${options.featuredOnly ? '1' : '0'}|tag:${tag || '*'}|limit:${limit || '*'}`;
+};
+
+const setProjectsCache = (cacheKey: string, projects: Project[]): void => {
+  if (!lastKnownProjectsByQuery.has(cacheKey) && lastKnownProjectsByQuery.size >= PROJECT_QUERY_CACHE_LIMIT) {
+    const firstKey = lastKnownProjectsByQuery.keys().next().value;
+    if (typeof firstKey === 'string') {
+      lastKnownProjectsByQuery.delete(firstKey);
+    }
+  }
+
+  lastKnownProjectsByQuery.set(cacheKey, projects);
+};
+
 export const getStrapiMediaUrl = (media?: Pick<StrapiMedia, 'url'> | null): string | null => {
   if (!media?.url) {
     return null;
@@ -175,9 +218,18 @@ export const strapiFetch = async <T>(
   queryObj?: Record<string, unknown>,
   options: StrapiFetchOptions = {},
 ): Promise<T | null> => {
-  if (Date.now() < strapiUnavailableUntil) {
+  const now = Date.now();
+  const circuitOpen = now < strapiUnavailableUntil;
+  const shouldProbe = now - strapiLastProbeAt >= STRAPI_CIRCUIT_PROBE_MS;
+
+  if (circuitOpen && !shouldProbe) {
     logStrapi(`[strapi] skipping ${path} while circuit breaker is open`);
     return null;
+  }
+
+  if (circuitOpen && shouldProbe) {
+    strapiLastProbeAt = now;
+    logStrapi(`[strapi] probing ${path} while circuit breaker is open`);
   }
 
   const controller = new AbortController();
@@ -212,6 +264,7 @@ export const strapiFetch = async <T>(
     }
 
     strapiUnavailableUntil = 0;
+    strapiLastProbeAt = 0;
     logStrapi(`[strapi] #${requestId} ok (${label})`);
 
     const data = (await response.json()) as T;
@@ -247,9 +300,14 @@ export const getSite = async (): Promise<Site> => {
   );
 
   if (!response?.data) {
+    if (lastKnownSite) {
+      return lastKnownSite;
+    }
+
     return mockSite;
   }
 
+  lastKnownSite = response.data;
   return response.data;
 };
 
@@ -258,6 +316,11 @@ export const getProjects = async (options: GetProjectsOptions = {}): Promise<Pro
   const featuredOnly = Boolean(options.featuredOnly);
   const cleanTag = options.tag?.trim() ?? '';
   const cleanLimit = normalizeLimit(options.limit);
+  const cacheKey = getProjectsCacheKey({
+    featuredOnly,
+    tag: cleanTag || undefined,
+    limit: cleanLimit || undefined,
+  });
 
   if (featuredOnly) {
     filters.featured = { $eq: true };
@@ -293,6 +356,11 @@ export const getProjects = async (options: GetProjectsOptions = {}): Promise<Pro
   );
 
   if (!response?.data) {
+    const cachedProjects = lastKnownProjectsByQuery.get(cacheKey);
+    if (cachedProjects) {
+      return cachedProjects;
+    }
+
     return filterProjects(mockProjects, {
       featuredOnly,
       tag: cleanTag || undefined,
@@ -300,7 +368,9 @@ export const getProjects = async (options: GetProjectsOptions = {}): Promise<Pro
     });
   }
 
-  return normalizeProjects(response.data);
+  const projects = normalizeProjects(response.data);
+  setProjectsCache(cacheKey, projects);
+  return projects;
 };
 
 export const getProjectBySlug = async (slug: string): Promise<Project | null> => {
@@ -352,6 +422,11 @@ export const getProjectBySlug = async (slug: string): Promise<Project | null> =>
   );
 
   if (!response?.data) {
+    const cachedProject = lastKnownProjectBySlug.get(cleanSlug);
+    if (cachedProject) {
+      return cachedProject;
+    }
+
     const fallbackProject = mockProjects.find((project) => project.slug === cleanSlug);
     return fallbackProject ? normalizeProject(fallbackProject) : null;
   }
@@ -361,7 +436,9 @@ export const getProjectBySlug = async (slug: string): Promise<Project | null> =>
     return null;
   }
 
-  return normalizeProject(project);
+  const normalized = normalizeProject(project);
+  lastKnownProjectBySlug.set(cleanSlug, normalized);
+  return normalized;
 };
 
 export const getAllProjectSlugs = async (): Promise<string[]> => {
@@ -383,10 +460,16 @@ export const getAllProjectSlugs = async (): Promise<string[]> => {
   );
 
   if (!response?.data) {
+    if (lastKnownProjectSlugs) {
+      return lastKnownProjectSlugs;
+    }
+
     return mockProjects.map((project) => project.slug);
   }
 
-  return response.data.map((project) => project.slug).filter((slug): slug is string => Boolean(slug));
+  const slugs = response.data.map((project) => project.slug).filter((slug): slug is string => Boolean(slug));
+  lastKnownProjectSlugs = slugs;
+  return slugs;
 };
 
 export const getHomepage = async (): Promise<{ site: Site; projects: Project[] }> => {
